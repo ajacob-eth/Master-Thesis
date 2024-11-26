@@ -12,39 +12,74 @@ from sklearn.preprocessing import StandardScaler
 from scipy import stats
 
 """
-Documentation how to run the different models.
+Documentation how to run and evaluate all the models.
 
-Models (CLASSIFIERS):
+
+1) Specification of the Models (CLASSIFIERS):
+
 Logistic Regression ('continuous', 'logistic_regression_higher_order'):
-Specify Regularizer 
+REGULARIZER(str): added penalty term ('l1'/'l2'//'elasticnet') or set None applying no regularization
+l1_ratio(float): lambda for 'elasticnet'
+REGULARIZATION_STRENGTH(float): alpha
+HYPERTUNE(bool): If set to true gridsearch is run with hyperparameterset specified in Feature_Model.fit()
+SCORING(str) = Scoring metric for hypertuning ('roc_auc'/'neg_brier_score')
+SECOND_ORDER(list): List specifying which features should have second-order term
+THIRD_ORDER(list): List specifying which features should have third-order term
+MIXING_TERMS(bool): If set to true all possible mixing terms are added
+SCALING(bool): if true scaling is applied to the data
+OPTIMIZER(str): set to 'saga', see documentation LogisticRegression class in sklearn other algorithms
+Note same specification for ('continuous', 'SGD_classifier_higher_order') but it uses SGD instead of 'saga'
 
+Bayesian Logistic Regression ('continuous', 'bayesian_logistic_regression'):
+REGULARIZATION_STRENGTH(float): alpha=1/sigma^2
+SECOND_ORDER(list): List specifying which features should have second-order term
+THIRD_ORDER(list): List specifying which features should have third-order term
+MIXING_TERMS(bool): If set to true all possible mixing terms are added
+SCALING(bool): if true scaling is applied to the data
 
+ANN ('continuous', 'nn_classifier'):
+DROP_OUT(float): Dropout probability or set it None if no dropout layer should be applied 
+REGULARIZER(str): added penalty term ('l2') or set None applying no regularization
+REGULARIZATION_STRENGTH(float): alpha (only for 'l2' available)
+HYPERTUNE(bool): If set to true cross-validation is applied with hyperparameterset (for 'l2' parameter) specified in Feature_Model.fit()
+NUM_OF_EPOCHS(int): Number of Epochs used for training
 
+BNN ('continuous', 'nn_classifier'):
+REGULARIZER(str): must be set to 'l2'
+REGULARIZATION_STRENGTH(float): alpha=1/sigma^2
+NUM_OF_EPOCHS(int): Number of Epochs used for training
+BNN_LAPLACE_METHOD(str) = string specifying calculation method of Hessian ('brute-force'/'daxberger'(deprecated/not recommended))
 
+Benchmark Model ('Thesis Clustering', 'mean'):
+SPECIFIC_FEATURE_COMBO: must select LTV and IC
+SCALING(bool): set to False
+
+2) Outputs:
+COMPUTE_COFUSION_METRICS(bool): If set to true and NUM_OF_TRAINING > 1 then model is evaluated according to evaluation methodology in the thesis; Output in file "Model Evaluation.xlsm"
+SINGLE_FEATURE_PLOTS(bool): If set to true and NUM_OF_TRAINING = 1 then probability of default curves are plotted and stored
+AUC_PLOT(bool): If set to true, NUM_OF_TRAINING = 1  and TRAIN_SIZE < 1 then AUC is plotted and stored
+GET_WEIGHTS (bool): If set to true and NUM_OF_TRAINING = 1 then weight distribution stats according to the thesis are created in the file "Model Evaluation.xlsm" (only for 'logistic_regression_higher_order')
+SPECIFIC_DATASET(bool): If set to true one can apply the model to loan portfolio with path (DATA_NAME); for BLR one can create uncertainty interval as discussed in thesis
 """
 
-
-
-
-OLD_THESIS_SET = True
-FILE_PATH = 'Your_Dataset.csv'
+FILE_PATH = 'Your_Dataset.csv' # path to underlying dataset
 EVAL_PATH = "Model Evaluation.xlsm" # path to your evaluation workbook in excel which formats automatically your outputs
 
 # Use a specific dataset to predict probabilities using your model and for Bayesian Logistic Regression get uncertainty interval for your prediciton
 SPECIFIC_DATASET = False
 DATA_NAME = r'loan_portfolio.xlsx' # path to your loan data 
-UNCERTAINTY_INTERVAL = False
+UNCERTAINTY_INTERVAL = False # only for bayesian logistic regression available
 
-# Select features to test out
+# Underlying feature set to check feature combinations
 FEATURES = [
-             'EBITDA (Initial)', 
+            'EBITDA (Initial)', 
            'LTV (Initial)',  
             'EV Multiple (Initial)', 
             'IC Combined (Initial)',
             'Security',
             'Total Net Leverage (Initial)',
             ]
-SPECIFIC_FEATURE_COMBO = (True, [ 
+SPECIFIC_FEATURE_COMBO = (True, [ # if set we only use the specified feature combo and no subcombos
             'EBITDA (Initial)', 
             'LTV (Initial)',  
             'EV Multiple (Initial)', 
@@ -67,8 +102,6 @@ THIRD_ORDER=[
             # 'FCC (Initial)',
 ]
 MIXING_TERMS = False
-
-
 # Choose the classifier; don't apply clustering when using benchmark model
 CLUSTERED = False
 SCALING = True
@@ -84,12 +117,13 @@ CLASSIFIERS = [
 HYPERTUNE = False
 SCORING = 'roc_auc' # 'neg_brier_score'
 REGULARIZATION_STRENGTH = 1e-4#1001/100
+DROP_OUT = None
 l1_ratio = 1/1001
 REGULARIZER = 'l2'
 OPTIMIZER = 'saga'
 NUM_OF_EPOCHS = 100
 SMOTE = False
-PRINT_WEIGHTS = False
+PRINT_WEIGHTS = False # prints the weights for the logistic regression models
 BNN_LAPLACE_METHOD = 'brute-force'
 
 # Evaluations
@@ -101,13 +135,13 @@ GET_WEIGHTS = True
 # Threshold optimization set for PAM measure
 BASE_CASE_THRESHOLDS = np.linspace(0.01, 0.495, 99, endpoint=True)
 BASE_CASE_LOAN_LIFE = 3
-THRESHOLDS = np.array([0.0481])
-AUC_RANGE = (0, 0.4)
+THRESHOLDS = np.array([0.0481]) # Specifies threshold-specific metrics (multiple thresholds are possible as entry)
+AUC_RANGE = (0, 0.4) # specifies pAUC 
 COMPUTE_COFUSION_METRICS = True
 SINGLE_FEATURE_PLOTS = True
-CONVERT_TO_LOSSRATE = False
-RECOVERY_RATE = 0.6
-SUB_DELTA = 0.2
+CONVERT_TO_LOSSRATE = False # converts probability of default to annualized expected lossrate if set to true for pd curves
+RECOVERY_RATE = 0.6 # recovery rate assumption for senior-secured deals
+SUB_DELTA = 0.2 # recovery rate delta between senior secured and subordinated debt
 AUC_PLOT = False
 
 def generate_combinations(lst):
@@ -489,7 +523,7 @@ if __name__ == "__main__":
                                     features=features,
                                     simply_clustered=CLUSTERED, second_order_features=second_order, third_order_features=third_order, penalty=REGULARIZER,
                                     alpha=REGULARIZATION_STRENGTH, num_of_epochs=NUM_OF_EPOCHS, mixing_terms=MIXING_TERMS, optimizer=OPTIMIZER, l1_ratio=l1_ratio,
-                                    hypertune=HYPERTUNE, scoring=SCORING, smote=SMOTE, random_state=j+777, print_weights=PRINT_WEIGHTS, bnn_laplace='brute-force',
+                                    hypertune=HYPERTUNE, scoring=SCORING, smote=SMOTE, random_state=j+777, print_weights=PRINT_WEIGHTS, bnn_laplace='brute-force', drop_out=DROP_OUT,
                                     )
                 model.fit()
 
@@ -618,4 +652,6 @@ if __name__ == "__main__":
         add_evaluation_to_workbook(evaluation_df=evaluation_df, workbook_path=EVAL_PATH, macro_name="format_metrics")
 
     
+    
+
     
