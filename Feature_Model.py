@@ -29,7 +29,6 @@ from sklearn.cluster import KMeans
 from sklearn.model_selection import train_test_split, KFold, GridSearchCV
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.calibration import calibration_curve
-from xgboost import XGBClassifier
 
 from imblearn.over_sampling import SMOTE
 
@@ -670,7 +669,7 @@ class Feature_Model():
 
     def __init__(self, df: pd.DataFrame, clustering_method='continuous', classifier='logistic_regression', device = 'cpu', penalty='l2', alpha = 3,
                  features = ['FCC (Initial)', 'LTV (Initial)', 'Thesis Default',], second_order_features=['Total Net Leverage (Initial)' ] ,
-                   third_order_features=['Total Net Leverage (Initial)'], num_of_epochs=100, k=10, simply_clustered=False, optimizer='saga', mixing_terms=True, l1_ratio=0, hypertune=False, scoring='roc_auc', smote=False, random_state=123, print_weights=False, bnn_laplace='brute-force') -> None:
+                   third_order_features=['Total Net Leverage (Initial)'], num_of_epochs=100, k=10, simply_clustered=False, optimizer='saga', mixing_terms=True, l1_ratio=0, hypertune=False, scoring='roc_auc', smote=False, random_state=123, print_weights=False, bnn_laplace='brute-force', drop_out=None) -> None:
         """
         Initialize a feature model specified by its clustering technique and classifier.
 
@@ -714,6 +713,7 @@ class Feature_Model():
         self.optimizer = optimizer
         self.l1_ratio = l1_ratio
         self.bnn_laplace = bnn_laplace
+        self.drop_out = drop_out
         DEFAULT_DICT = {
             'EBITDA (Initial)': 35.4 * 1e6, 
             'LTV (Initial)': 0.485, 
@@ -728,10 +728,10 @@ class Feature_Model():
         self.classifier, self.sklearn_compatible = { 
             'logistic_regression_higher_order': (LogisticRegression(penalty=penalty, C=1/alpha, solver=optimizer, l1_ratio=self.l1_ratio), True),  
                            'mean': (np.mean, False), 
-                           'nn_classifier': (NN_Classifier(input_dim=num_of_features_continuous, hidden_dim=5, dropout_rate=None).to(device=device), False),
+                           'nn_classifier': (NN_Classifier(input_dim=num_of_features_continuous, hidden_dim=10, dropout_rate=self.drop_out).to(device=device), False),
                            'bayesian_logistic_regression': (LogisticRegression(penalty='l2', C=1/alpha, solver=optimizer), False),
                            'SGD_classifier_higher_order': (SGDClassifier(loss='log_loss', penalty=penalty, alpha=alpha, l1_ratio=l1_ratio,), True),
-                           'bnn_classifier': (NN_Classifier(input_dim=num_of_features_continuous, hidden_dim=5, dropout_rate=None).to(device=device), False), 
+                           'bnn_classifier': (NN_Classifier(input_dim=num_of_features_continuous, hidden_dim=10, dropout_rate=None).to(device=device), False), 
                            }[classifier]
         self.second_order_list = second_order_features
         self.third_order_list = third_order_features
@@ -1112,7 +1112,7 @@ class Feature_Model():
                     self.la.optimize_prior_precision(method='CV', val_loader=val_loader)
 
 
-                # BRUTE FORCE AUTODIFFERENTIATION ATTEMPT
+                # BRUTE FORCE AUTODIFFERENTIATION 
                 else:
                     # Store w_MAP after training
                     w_map = []
@@ -1465,4 +1465,6 @@ class Feature_Model():
 
         plt.savefig(os.path.join(self.feature_subfolder, f'{title_plot.replace(" ", "_")}_{feature[0].replace(" ", "_")}_Plot.pdf'), format='pdf')
         plt.close()
+
+
 
