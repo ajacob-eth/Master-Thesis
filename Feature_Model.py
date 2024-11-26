@@ -11,13 +11,16 @@ import os
 import json
 from itertools import combinations
 
+from laplace import Laplace
+
 import torch 
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 from torch.optim import Adam, SGD, SparseAdam
+import torch.distributions as dist
 import joblib
 
-from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error, roc_curve, auc, precision_score, recall_score, f1_score, confusion_matrix, precision_recall_curve, brier_score_loss, log_loss
+from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error, roc_curve, auc, precision_score, recall_score, f1_score, confusion_matrix, precision_recall_curve, brier_score_loss, log_loss, roc_auc_score
 from sklearn.linear_model import LinearRegression, Ridge, LogisticRegression, LogisticRegressionCV, SGDClassifier
 from sklearn.gaussian_process import GaussianProcessClassifier
 from sklearn.gaussian_process.kernels import RBF, Matern, DotProduct, RationalQuadratic
@@ -84,7 +87,7 @@ class NN_Classifier(nn.Module):
             torch.Tensor: Output of the neural network.
         """
         out = self.hidden_layer1(input)
-        out = torch.sigmoid(out)
+        out = torch.tanh(out)
 
         if self.dropoutrate is not None:
             out = self.dropout1(out)
@@ -94,141 +97,10 @@ class NN_Classifier(nn.Module):
 
         return out
 
-
-class BNN_Classifier(nn.Module):
-    def __init__(self, input_dim=2, hidden_dim=3, output_dim=1, dropout_rate=None, sigma_prior=1.0):
-        super(BNN_Classifier, self).__init__()
-        self.hidden_layer1 = nn.Linear(input_dim, hidden_dim, dtype=torch.float64)
-        self.dropoutrate = dropout_rate
-        self.sigma_prior = sigma_prior
-
-        if dropout_rate is not None:
-            if not (0 <= dropout_rate <= 1):
-                raise ValueError("Dropout rate must be between 0 and 1")
-            self.dropout1 = nn.Dropout(p=dropout_rate)
-
-        self.output_layer = nn.Linear(hidden_dim, output_dim, dtype=torch.float64)
-        self.apply(self.initialize_weights)
-
-    def initialize_weights(self, layer):
-        if isinstance(layer, nn.Linear):
-            nn.init.xavier_uniform_(layer.weight)
-
-    def forward(self, input):
-        out = self.hidden_layer1(input)
-        out = torch.sigmoid(out)
-
-        if self.dropoutrate is not None:
-            out = self.dropout1(out)
-
-        out = self.output_layer(out)
-        out = torch.sigmoid(out)
-
-        return out
-
-    def log_prior(self):
-        log_prior = 0.0
-        for param in self.parameters():
-            log_prior += -0.5 * torch.sum(param.pow(2)) / (self.sigma_prior ** 2)
-        return log_prior
-
-    def log_likelihood(self, x, y):
-        y_pred = self.forward(x)
-        likelihood = torch.distributions.Bernoulli(y_pred).log_prob(y)
-        return likelihood.sum()
-
-    def log_posterior(self, x, y):
-        return self.log_likelihood(x, y) + self.log_prior()
-
-    def hessian(self, x, y):
-        loss = -self.log_posterior(x, y)
-        loss.backward(create_graph=True)
-        hessian = []
-        for param in self.parameters():
-            grad2 = torch.autograd.grad(loss, param, retain_graph=True, create_graph=True)[0]
-            hess = torch.autograd.grad(grad2, param, retain_graph=True)[0]
-            hessian.append(hess)
-        return hessian
-
-    def predict_monte_carlo(self, x, num_samples=100):
-        """
-        Monte Carlo approximation for Bayesian prediction.
-
-        Args:
-            x (torch.Tensor): Input data.
-            num_samples (int): Number of Monte Carlo samples.
-
-        Returns:
-            np.ndarray: Mean of predictions across sampled weights as a NumPy array.
-        """
-        preds = []
-        for _ in range(num_samples):
-            sampled_params = []
-            for param in self.parameters():
-                # Sample weight perturbations from a normal distribution
-                noise = torch.randn_like(param) * self.sigma_prior
-                sampled_param = param + noise
-                sampled_params.append(sampled_param)
-            
-            # Temporarily set model parameters to the sampled ones
-            self.set_parameters(sampled_params)
-            
-            # Compute forward pass and store prediction
-            preds.append(self.forward(x))
-        
-        # Restore original parameters (optional depending on your use case)
-        self.apply(self.initialize_weights)
-        
-        # Convert the mean of the predictions to a NumPy array and return
-        return torch.stack(preds).mean(0).detach().numpy()
-
-    def set_parameters(self, params):
-        """
-        Helper function to set the model parameters with given values.
-        
-        Args:
-            params (List[torch.Tensor]): List of parameters to set.
-
-        Returns:
-            None
-        """
-        with torch.no_grad():
-            for p, new_p in zip(self.parameters(), params):
-                p.copy_(new_p)    
-
-
-def train_bnn(model, X_train, y_train, learning_rate=0.01, num_epochs=1000):
-    # Define the optimizer
-    optimizer = Adam(model.parameters(), lr=learning_rate)
-    
-    # Loss function (Binary Cross Entropy)
-    loss_fn = nn.BCELoss()
-
-    model.train()
-    for epoch in range(num_epochs):
-        optimizer.zero_grad()
-        
-        # Forward pass
-        y_pred = model(X_train)
-        
-        # Compute the loss
-        loss = loss_fn(y_pred, y_train)
-        
-        # Add prior to the loss for Bayesian inference (Regularization)
-        loss -= model.log_prior()
-        
-        # Backward pass
-        loss.backward()
-        
-        # Update parameters
-        optimizer.step()
-        
-        if (epoch + 1) % 100 == 0:
-            print(f"Epoch [{epoch+1}/{num_epochs}], Loss: {loss.item():.4f}")
 
 def benchmark_clustering(ltv_percentiles, ic_percentiles, ic_value, ltv_value):
     """
-    Clusters IC and LTV values based on provided percentiles.
+    Clusters IC and LTV values based on provided percentiles. Helper funtion for benchmark model.
 
     Args:
         ltv_percentiles (list of float): Percentiles for LTV values.
@@ -264,13 +136,13 @@ def benchmark_clustering(ltv_percentiles, ic_percentiles, ic_value, ltv_value):
 
 def ebitda_cluster(x):
     """
-    Helper function to categorize EBITDA values into clusters.
+    Helper function to apply floor and cap to EBITDA.
 
     Args:
         x (float): EBITDA value.
 
     Returns:
-        float: Log-transformed EBITDA value for clustering.
+        float: Log-transformed EBITDA value.
     """
     if x >= 300 * 1e6:
         return np.log(300 * 1e6)
@@ -286,7 +158,7 @@ def ebitda_cluster(x):
 
 def LTV_cluster(x):
     """
-    Helper function to categorize Loan-to-Value (LTV) ratio values into clusters.
+    Helper function to apply floor and cap to LTV.
 
     Args:
         x (float): LTV ratio value.
@@ -306,7 +178,7 @@ def LTV_cluster(x):
 
 def IC_Cluster(x):
     """
-    Helper function to categorize Interest Coverage (IC) ratio values into clusters.
+    Helper function to apply floor and cap to IC.
 
     Args:
         x (float): IC ratio value.
@@ -330,7 +202,7 @@ def IC_Cluster(x):
 
 def EV_Multiple_cluster(x):
     """
-    Helper function to categorize Enterprise Value (EV) multiples into clusters.
+    Helper function to apply floor and cap to EV Multiple.
 
     Args:
         x (float): EV multiple value.
@@ -389,7 +261,7 @@ def Security_cluster(x):
 
 def cluster_net_leverage(x):
     """
-    Helper function to categorize net leverage values into clusters.
+    Helper function to apply floor and cap to Net Leverage.
 
     Args:
         x (float): Net leverage value.
@@ -398,17 +270,19 @@ def cluster_net_leverage(x):
         int: Cluster index based on the net leverage value.
         float: NaN if the value does not match any predefined categories.
     """
-    if x > 0:
+    if x <= 4:
+        return 4
+    elif x <= 9:  # Ensure the correct range for the second cluster
         return x
-    elif x > 6.5:
-        return 6.5
+    elif x > 9:
+        return 9
     else:
         return float('nan')
 
 def base_case_cum_net_return(fprs, tprs, thresholds=np.linspace(0.01, 0.99, 99, endpoint=True), 
-                             loan_life=2.5, default_rate=0.0476):
+                             loan_life=3, default_rate=0.05):
     """
-    Calculate a metric comparing different models or scenarios based on loan performance.
+    Calculate a metric comparing different classifiers based on loan performance.
 
     Args:
         fprs (array-like): Array of false positive rates (FPR).
@@ -424,14 +298,14 @@ def base_case_cum_net_return(fprs, tprs, thresholds=np.linspace(0.01, 0.99, 99, 
             - float: False positive rate corresponding to the optimal threshold.
             - float: True positive rate corresponding to the optimal threshold.
     """
-    Num_of_loans = 1000
+    Num_of_loans = 100
     overall_default_rate = default_rate
     bad_loans = np.ceil(Num_of_loans * overall_default_rate)
     good_loans = Num_of_loans - bad_loans
 
-    r_per_deal = 0.08
+    r_per_deal = 0.1
     recovery_rate = 0.5
-    r_alternative = 0.055
+    r_alternative = 0.05
     Maturity = loan_life
 
     # Calculate annualized base case portfolio return
@@ -464,7 +338,7 @@ def base_case_cum_net_return(fprs, tprs, thresholds=np.linspace(0.01, 0.99, 99, 
     return (10000 * ((cum_net_returns[ind])**(1/loan_life) - 1 - annualized_base_case_portfolio_return), 
             thresholds[ind], fprs[ind], tprs[ind])
 
-def pre_processing(df0, features, simply_clustered=False, scaling=True, US_EU_Only=True, trained_scaler=None, scaler=StandardScaler(), print_weights=False):
+def pre_processing(df0, features, simply_clustered=False, scaling=False, trained_scaler=None, scaler=StandardScaler(), print_weights=False):
     """
     Processes the input dataframe and returns a cleaned and preprocessed dataframe.
 
@@ -472,8 +346,7 @@ def pre_processing(df0, features, simply_clustered=False, scaling=True, US_EU_On
         df0 (pd.DataFrame): Input dataset.
         features (array-like): List of desired features to retain and process.
         simply_clustered (bool, optional): Whether to apply simple clustering to certain features. Defaults to False.
-        scaling (bool, optional): Whether to apply scaling to the features. Defaults to True.
-        US_EU_Only (bool, optional): Whether to retain only US and Europe regions. Defaults to True.
+        scaling (bool, optional): Whether to apply scaling to the features. Defaults to False.
         trained_scaler (StandardScaler, optional): Pre-trained scaler for scaling features. If provided, it will be used for scaling. Defaults to None.
         print_weights (bool): If set to true print the mean and standard deviations from the scaler.
     Returns:
@@ -495,28 +368,7 @@ def pre_processing(df0, features, simply_clustered=False, scaling=True, US_EU_On
     
     for feature in features:
 
-        if feature == 'Region':
-
-            if US_EU_Only:
-                df = df[df['Region'] != 'Other'].copy()
-            
-            one_hot_encoder = OneHotEncoder()
-            one_hot_encoded = one_hot_encoder.fit_transform(df[['Region']])
-            columns = one_hot_encoder.get_feature_names_out(['Region'])
-            one_hot_encoded_df = pd.DataFrame(one_hot_encoded.toarray(), columns=columns, index=df.index)
-
-            df = pd.concat([df, one_hot_encoded_df], axis=1)
-            drop_reg_col = ['Region', 'Region_Other']
-            if US_EU_Only:
-                drop_reg_col.append('Region_Europe')
-            df = df.drop(columns=[col for col in drop_reg_col if col in df.columns])
-            
-            if not US_EU_Only:
-                for col in ['Region_US', 'Region_Europe']:
-                    if col not in df.columns:
-                        df[col] = 0
-
-        elif feature == 'EBITDA (Initial)':
+        if feature == 'EBITDA (Initial)':
             if simply_clustered:                
                 df["EBITDA (Initial)"] = df["EBITDA (Initial)"].apply(ebitda_cluster)
             else:
@@ -527,13 +379,10 @@ def pre_processing(df0, features, simply_clustered=False, scaling=True, US_EU_On
             if simply_clustered:
                 df[feature] = df[feature].apply(EV_Multiple_cluster)            
 
-        elif feature == 'IC (Initial)':
+        elif feature == 'IC Combined (Initial)':
             df = df[(df[feature] > 0) & (df[feature] < 10)].copy()
             if simply_clustered:
                 df[feature] = df[feature].apply(IC_Cluster)
-
-        elif feature == 'Ownership':
-            df['Ownership'] = df['Ownership'].apply(lambda x: 1 if x == 'Sponsor' else (0 if x == 'Private Corporate' else float('nan')))
 
         elif feature == 'LTV (Initial)':
             df = df[(df[feature] > 0) & (df[feature] < 1)].copy()
@@ -592,7 +441,7 @@ def pre_processing(df0, features, simply_clustered=False, scaling=True, US_EU_On
         # Create a dataframe with scaled features
         scaled_df = pd.DataFrame(scaled_features, columns=feature_columns)
 
-        # Extract means and Standard Deviations from scaler (scaler is StandardScaler form sklearn)
+        # TODO: Extract means and Standard Deviations from scaler (scaler is StandardScaler form sklearn)
         if print_weights:
             # Extract means and standard deviations from the scaler
             means = scaler.mean_
@@ -624,21 +473,20 @@ def hessian_log_posterior(weights, X, y, sigma_squared):
     Args:
         weights (ndarray): The model weights.
         X (ndarray): The feature matrix.
-        y (ndarray): The target vector.
-        sigma_squared (float): Diagonal entry for prior
+        y (ndarray): The target boolean vector.
+        sigma_squared (float): Variance of prior
 
     Returns:
-        hessian (ndarray): The Hessian matrix of the log-posterior.
+        -H_log_posterior (ndarray): Lambda for Laplace approximation
     """
-    p = 1 / (1 + np.exp(-X @ weights))
+    p = 1 / (1 + np.exp(-(2*y-1)*(X @ weights)))
     W = np.diag(p * (1 - p))
     H_log_likelihood = -X.T @ W @ X
     H_log_prior = -(1/sigma_squared) * np.eye(len(weights))
     H_log_posterior = H_log_likelihood + H_log_prior
     
-    return -H_log_posterior  # We return negative because we minimize in scipy
+    return -H_log_posterior  
 
-# TODO: Adapt the optimizer!
 def fit_bayesian_logistic_regression(X, y, sigma_squared=1/2):
     """
     Fit Bayesian Logistic Regression using Laplace approximation.
@@ -652,15 +500,15 @@ def fit_bayesian_logistic_regression(X, y, sigma_squared=1/2):
         dict: Dictionary containing the MAP estimate, bias and the covariance matrix.
     """
     # Fit logistic regression to get the MAP estimate
-    alpha = 1/ (2*sigma_squared)
-    logistic_model = LogisticRegression(penalty='l2', C=1/alpha, solver='lbfgs',)
+    alpha = 1/ (sigma_squared)
+    logistic_model = LogisticRegression(penalty='l2', C=1/alpha, solver='saga',)
     logistic_model.fit(X, y)
     
     # Get the MAP estimate of the weights
     w_map = logistic_model.coef_.flatten()
 
     # Calculate the Hessian of the negative log-posterior at the MAP estimate
-    H = hessian_log_posterior(w_map, X, y, alpha)
+    H = hessian_log_posterior(w_map, X, y, 1/alpha)
     
     # Calculate the covariance matrix (inverse of the Hessian)
     cov_matrix = inv(H)
@@ -713,12 +561,116 @@ def bayesian_predictive_distribution(X, w_map, bias, cov_matrix, num_samples=100
     
     return probability_of_default
 
+def sample_posterior_BNN(w_map, Lambda_diag):
+    """
+    Samples weights from the approximate posterior distribution of a Bayesian Neural Network (BNN)
+    using a Laplace approximation around the MAP estimate.
+    
+    Parameters:
+    -----------
+    w_map : list of torch.Tensor
+        The MAP (maximum a posteriori) estimate of the model parameters (weights).
+    Lambda_diag : torch.Tensor
+        The diagonal elements of the Hessian matrix (Lambda) of the negative log-posterior,
+        representing the precision (inverse variance) for each parameter in the approximate Gaussian posterior.
+        
+    Returns:
+    --------
+    sampled_params : list of torch.Tensor
+        A list of sampled parameters from the posterior distribution, where each sampled parameter
+        tensor has the same shape as the corresponding tensor in w_map. These weights can be loaded 
+        into the neural network to perform inference under the sampled posterior distribution.
+    
+    Notes:
+    ------
+    - This function assumes a diagonal approximation to the Hessian (Lambda), which simplifies the 
+      posterior covariance matrix to be diagonal. Each parameter is sampled independently based on
+      its variance.
+    - The posterior distribution is approximated as a Gaussian: N(w_map, Lambda^-1), where Lambda^-1 
+      represents the variances of each weight.
+    
+    Example Usage:
+    --------------
+    # Given a trained model with w_map and Lambda_diag computed:
+    sampled_weights = sample_posterior_BNN(w_map, Lambda_diag)
+    """
+    
+    sampled_params = []
+    # Add a small positive constant to Lambda_diag to prevent division by zero or negative values
+    Lambda_diag = torch.clamp(Lambda_diag, min=1e-6).double()
+    
+    for i, param in enumerate(w_map):
+        # Standard deviation for sampling is 1/sqrt(Lambda_diag)
+        param = param.double()
+        stddev = torch.sqrt(1.0 / Lambda_diag[i])
+        
+        # Sample from the Gaussian N(w_map, Lambda^-1)
+        noise = torch.distributions.Normal(torch.zeros_like(param), stddev).sample()
+        sampled_param = param + noise
+        sampled_params.append(sampled_param)
+    
+    return sampled_params
+
+def bayesian_predict(model, X, w_map, Lambda_diag, M=100, device='cpu'):
+    """
+    Performs Bayesian prediction by averaging the outputs of the ANN over M samples
+    from the approximate posterior distribution.
+    
+    Parameters:
+    -----------
+    model : nn.Module
+        The neural network model to be used for prediction.
+    X : np.ndarray
+        The input data for which predictions are to be made. Each row should be a feature vector.
+    w_map : list of torch.Tensor
+        The MAP (maximum a posteriori) estimate of the model parameters (weights).
+    Lambda_diag : torch.Tensor
+        The diagonal elements of the Hessian matrix (Lambda) of the negative log-posterior,
+        representing the precision (inverse variance) for each parameter in the approximate Gaussian posterior.
+    M : int, optional (default=100)
+        The number of weight samples to draw from the posterior for averaging predictions.
+    device : str, optional (default='cpu')
+        The device on which to perform predictions ('cpu' or 'cuda').
+        
+    Returns:
+    --------
+    np.ndarray
+        A 1D NumPy array containing the averaged predictions for each input row in X.
+    """
+    model.eval()
+
+    # Convert X from NumPy array to PyTorch tensor and move to the specified device
+    X_tensor = torch.tensor(X, dtype=torch.float64).to(device)
+    predictions = []
+    # Ensure w_map and Lambda_diag are in float64 for compatibility with model parameters
+    w_map = [param.double() for param in w_map]
+    Lambda_diag = Lambda_diag.double()
+
+    for _ in range(M):
+        # Sample weights from the posterior
+        sampled_weights = sample_posterior_BNN(w_map, Lambda_diag)
+        
+        # Load the sampled weights into the model
+        with torch.no_grad():
+            for param, sampled_param in zip(model.parameters(), sampled_weights):
+                param.copy_(sampled_param)
+
+        # Make predictions with the sampled weights
+        with torch.no_grad():
+            outputs = model(X_tensor).squeeze()  # Ensure outputs are 1D for each row in X
+            predictions.append(outputs)
+
+    # Stack the predictions and compute the mean along the sample dimension
+    predictions = torch.stack(predictions).mean(dim=0)
+
+    # Convert to a 1D NumPy array
+    return predictions.cpu().numpy()
 
 class Feature_Model():
 
     def __init__(self, df: pd.DataFrame, clustering_method='continuous', classifier='logistic_regression', device = 'cpu', penalty='l2', alpha = 3,
                  features = ['FCC (Initial)', 'LTV (Initial)', 'Thesis Default',], second_order_features=['Total Net Leverage (Initial)' ] ,
-                   third_order_features=['Total Net Leverage (Initial)'], num_of_epochs=100, k=10, simply_clustered=False, optimizer='saga', mixing_terms=True, l1_ratio=0.15, hypertune=False, scoring='roc_auc', smote=False, random_state=123, print_weights=False) -> None:
+                   third_order_features=['Total Net Leverage (Initial)'], num_of_epochs=100, k=10, simply_clustered=False, optimizer='saga', mixing_terms=True, l1_ratio=0, hypertune=False, scoring='roc_auc', smote=False, random_state=123, print_weights=False, bnn_laplace='brute-force') -> None:
         """
         Initialize a feature model specified by its clustering technique and classifier.
 
@@ -743,6 +695,7 @@ class Feature_Model():
             smote (bool): Bool determining whether smote resampling is applied for fitting the model 
             random_state (int): Random state for SMOTE resampling 
             print_weights (bool): Print weights and bias for Logistic Regression
+            bnn_laplace(str): String specifiyng the calculation of the hessian in laplace BNN prediction; either 'brute_force' or 'daxberger'
 
         Returns:
             None
@@ -757,31 +710,29 @@ class Feature_Model():
         self.clustering_method = clustering_method
         self.clustered = False
         self.trained = False
+        self.penalty = penalty
+        self.optimizer = optimizer
+        self.l1_ratio = l1_ratio
+        self.bnn_laplace = bnn_laplace
         DEFAULT_DICT = {
             'EBITDA (Initial)': 35.4 * 1e6, 
             'LTV (Initial)': 0.485, 
-            'Maturity': 5.0,  
-            'Region': 'US',  
             'EV Multiple (Initial)': 8,
-            'Ownership': 'Sponsor',
             'Total Net Leverage (Initial)': 4.5,
-            'IC (Initial)': 3,
+            'IC Combined (Initial)': 2.8,
             'Security': 'First Lien or Unitranche',
             }
         self.default_dict = {key: DEFAULT_DICT[key] for key in self.features if key != 'Thesis Default'}
         self.classifier_method = classifier
         num_of_features_continuous = self.df.drop(columns=['Thesis Default']).shape[1]
-        self.classifier, self.sklearn_compatible = {
-            'logistic_regression': (LogisticRegression(penalty=None, solver=optimizer, C=1/alpha), True), 
-            'logistic_regression_higher_order': (LogisticRegression(penalty=penalty, C=1/alpha, solver=optimizer), True),
-            'regularized_logistic_regression': (LogisticRegressionCV(penalty=penalty, cv=3, solver=optimizer, Cs=[1/x for x in range(1, 10, 2)]), True), 
-            'mean': (np.mean, False), 
-            'nn_classifier': (NN_Classifier(input_dim=num_of_features_continuous, hidden_dim=5, dropout_rate=0.5).to(device=device), False),
-            'bayesian_logistic_regression': (LogisticRegression(penalty='l2', C=1/alpha,), False),
-            'SGD_classifier_higher_order': (SGDClassifier(loss='log_loss', penalty=penalty, alpha=alpha, l1_ratio=l1_ratio,), True),
-            'SGD_classifier': (SGDClassifier(loss='log_loss', penalty=penalty, alpha=alpha, l1_ratio=l1_ratio,), True),
-            'bnn_classifier': (BNN_Classifier(input_dim=num_of_features_continuous, hidden_dim=5, output_dim=1, dropout_rate=None), False), 
-                }[classifier]
+        self.classifier, self.sklearn_compatible = { 
+            'logistic_regression_higher_order': (LogisticRegression(penalty=penalty, C=1/alpha, solver=optimizer, l1_ratio=self.l1_ratio), True),  
+                           'mean': (np.mean, False), 
+                           'nn_classifier': (NN_Classifier(input_dim=num_of_features_continuous, hidden_dim=5, dropout_rate=None).to(device=device), False),
+                           'bayesian_logistic_regression': (LogisticRegression(penalty='l2', C=1/alpha, solver=optimizer), False),
+                           'SGD_classifier_higher_order': (SGDClassifier(loss='log_loss', penalty=penalty, alpha=alpha, l1_ratio=l1_ratio,), True),
+                           'bnn_classifier': (NN_Classifier(input_dim=num_of_features_continuous, hidden_dim=5, dropout_rate=None).to(device=device), False), 
+                           }[classifier]
         self.second_order_list = second_order_features
         self.third_order_list = third_order_features
         self.mixing_terms = mixing_terms
@@ -821,14 +772,13 @@ class Feature_Model():
     
     def data_clustering(self, df_test=None):
         """
-        Cluster the data using various techniques (self.clustering_method).
+        Cluster the data for the benchmark model.
 
         Args:
             df_test (pd.DataFrame): The input dataframe to be clustered.
 
         Returns:
-        pd.DataFrame: One-hot encoded DataFrame for mean prediction, the original DataFrame for continuous method,
-                      or a DataFrame with discrete versions of continuous features.
+        pd.DataFrame: Clustered DataFrame for mean prediction or the original DataFrame for continuous method.
         """
         if df_test is None:
             raise ValueError("The input dataframe 'df_test' cannot be None.")
@@ -870,7 +820,7 @@ class Feature_Model():
 
 
         # Process higher order terms if applicable
-        if self.classifier_method in  ['logistic_regression_higher_order', 'regularized_logistic_regression', 'bayesian_logistic_regression', 'SGD_classifier_higher_order']:
+        if self.classifier_method in  ['logistic_regression_higher_order', 'bayesian_logistic_regression', 'SGD_classifier_higher_order']:
             # Add second order terms to the dataframe
             self.second_order_list = [feature for feature in self.second_order_list if feature in self.df.columns]
             for feature in self.second_order_list:
@@ -896,9 +846,12 @@ class Feature_Model():
         X = self.df.drop(columns = ['Thesis Default']).values
         y = self.df['Thesis Default'].values
 
+        self.default_mean = y.mean()
+
         if self.smote:
             smote = SMOTE(random_state=self.random_state)
             X, y = smote.fit_resample(X, y)
+            self.smote_probability_scaler = self.default_mean / y.mean()
 
         self.X = X
         self.y = y
@@ -942,7 +895,7 @@ class Feature_Model():
             # no hypertuning for the other sklearn models as there are no hyperparameters
             else: 
                 self.classifier.fit(X, y)
-                # Print weights and bias
+                # TODO: Print weights and bias
                 if self.print_weights:
                     weights = self.classifier.coef_[0]  # Get the coefficients (weights)
                     bias = self.classifier.intercept_[0]  # Get the intercept (bias)
@@ -984,8 +937,102 @@ class Feature_Model():
 
                 self.trained = True
 
-        elif self.classifier_method in ['nn_classifier', 'bnn_classifier']:
+        elif self.classifier_method in ['nn_classifier', 'bnn_classifier',]:
+            
+            
+            # Define L2 (weight_decay) values to hypertune if using cross-validation
+            l2_reg_values = [1e-2, 1e-1, 1.0, 1e2, 1e3, ] if self.hypertune else [0]
 
+            if self.hypertune:
+                
+                best_weight_decay = None
+                best_val_auc = 0  # Initialize best AUC as 0 since we're maximizing AUC
+
+                # Initialize KFold cross-validation
+                kfold = KFold(n_splits=3, shuffle=True, random_state=self.random_state)
+
+                # Iterate over each L2 regularization strength
+                for l2_value in l2_reg_values:
+                    avg_val_auc_across_folds = 0.0
+
+                    # K-fold cross-validation loop
+                    for fold, (train_idx, val_idx) in enumerate(kfold.split(X, y)):
+                        print(f"Fold {fold + 1}/{kfold.n_splits} with L2={l2_value}")
+                        
+                        # Split dataset into training and validation sets for this fold
+                        X_train, X_val = X[train_idx], X[val_idx]
+                        y_train, y_val = y[train_idx], y[val_idx]
+
+                        # Construct dataloaders for this fold
+                        train_dataset = TensorDataset(torch.tensor(X_train, dtype=torch.float64), torch.tensor(y_train, dtype=torch.float64))
+                        val_dataset = TensorDataset(torch.tensor(X_val, dtype=torch.float64), torch.tensor(y_val, dtype=torch.float64))
+                        train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True)
+                        val_loader = DataLoader(val_dataset, batch_size=64, shuffle=False)
+
+                        # Reinitialize model and optimizer for each fold
+                        self.classifier.apply(self.classifier.initialize_weights)
+                        self.optimizer = Adam(self.classifier.parameters(), lr=0.001, weight_decay=l2_value)  # Set weight_decay
+
+                        criterion = nn.BCELoss()
+
+                        # Training and Validation Loop for each fold
+                        num_epochs = self.num_of_epochs
+                        for epoch in range(num_epochs):
+                            # Train phase
+                            self.classifier.train()
+                            running_loss = 0.0
+                            for inputs, labels in train_loader:
+                                inputs, labels = inputs.to(self.device), labels.to(self.device)
+
+                                self.optimizer.zero_grad()
+                                outputs = self.classifier(inputs)
+                                outputs = outputs.view(-1)  # Ensure outputs have shape [batch_size]
+                                loss = criterion(outputs, labels)  # Labels should already have shape [batch_size]
+                                loss.backward()
+                                self.optimizer.step()
+                                running_loss += loss.item() * inputs.size(0)
+
+                        # Validation phase - Calculate AUC for this fold
+                        self.classifier.eval()
+                        y_val_true = []
+                        y_val_prob = []
+                        with torch.no_grad():
+                            for inputs, labels in val_loader:
+                                inputs, labels = inputs.to(self.device), labels.to(self.device)
+                                
+                                # Forward pass
+                                outputs = self.classifier(inputs)
+                                
+                                # Ensure output is of shape [batch_size] to match labels
+                                outputs = outputs.view(-1)  # Flatten to [batch_size] to match labels
+                                
+                                # Extend true labels and predicted probabilities
+                                y_val_true.extend(labels.cpu().numpy())  # True labels
+                                y_val_prob.extend(outputs.cpu().numpy())  # Predicted probabilities
+
+                        # Calculate AUC for this fold
+                        fold_auc = roc_auc_score(y_val_true, y_val_prob)
+                        print(f"Fold {fold + 1} AUC: {fold_auc:.5f}")
+                        avg_val_auc_across_folds += fold_auc
+
+                    # Calculate mean AUC across folds for the current L2 value
+                    avg_val_auc_across_folds /= kfold.n_splits
+                    print(f"Average AUC for L2={l2_value}: {avg_val_auc_across_folds:.5f}")
+
+                    # Track the best weight_decay value based on AUC
+                    if avg_val_auc_across_folds > best_val_auc:
+                        best_val_auc = avg_val_auc_across_folds
+                        best_weight_decay = l2_value
+
+                # Print the best L2 value found
+                print(f"Best L2 regularization (weight_decay): {best_weight_decay} with AUC: {best_val_auc:.5f}")
+
+                # Set the best weight_decay for final training
+                weight_decay = best_weight_decay
+                self.optimal_hyper_parameters  = {'C': 1/best_weight_decay}  # Used to keep track of best parameters
+            else:
+                weight_decay = 1/self.C if (self.penalty == "l2") and (1/self.C > 0) else 0
+            
             # Construct dataloaders for training and validation sets
             X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=1/7,)
 
@@ -995,10 +1042,8 @@ class Feature_Model():
             val_loader = DataLoader(val_dataset, batch_size=64, shuffle=True)
 
             # Define optimizer
-            self.optimizer = Adam(self.classifier.parameters(), lr=0.001)  
+            self.optimizer = Adam(self.classifier.parameters(), lr=0.001, weight_decay=weight_decay)  
 
-            # TODO: Potentially add weight criteria
-            # Define loss function
             criterion = nn.BCELoss()  
 
             best_val_loss = float('inf')
@@ -1006,11 +1051,8 @@ class Feature_Model():
             val_losses = []
 
             num_epochs = self.num_of_epochs
+            
             for epoch in range(num_epochs):
-
-                if self.classifier_method == 'bnn_classifier':
-                    criterion -= self.classifier.log_prior()
-
 
                 self.classifier.train()  # Set self.classifier to training mode
                 running_loss = 0.0
@@ -1048,21 +1090,71 @@ class Feature_Model():
                 train_losses.append(avg_train_loss)
                 val_losses.append(avg_val_loss)
 
-            plt.figure(figsize=(8, 12))
+            plt.figure(figsize=(12, 8))
             plt.semilogy(val_losses, label="Validation Loss")
             plt.semilogy(train_losses, label="Training Loss")
-            plt.title("Train vs. Validation Loss")
+            plt.title("Training vs. Validation Loss")
             plt.xlabel("Number of Epochs")
             plt.ylabel("Binary Classification Error")
             plt.legend()
             plt.grid(True)
-            file = os.path.join(self.feature_subfolder, "Val_Train_plot.png")
+            file = os.path.join(self.feature_subfolder, "Val_Train_plot.pdf")
             plt.savefig(file)
             plt.close()
+
+            # BNN Section
+            if self.classifier_method == 'bnn_classifier':
+
+                if self.bnn_laplace == 'daxberger':
+                    self.la = Laplace(self.classifier, "classification", subset_of_weights='all', hessian_structure="diag")
+                    self.la.fit(train_loader=train_loader)
+
+                    self.la.optimize_prior_precision(method='CV', val_loader=val_loader)
+
+
+                # BRUTE FORCE AUTODIFFERENTIATION ATTEMPT
+                else:
+                    # Store w_MAP after training
+                    w_map = []
+                    for param in self.classifier.parameters():
+                        w_map.append(param.detach().clone())  # Store the trained parameters as w_MAP
+
+                    self.w_map = w_map  # Save w_MAP for later use
+
+                    # Set model to evaluation mode for BNN posterior calculation
+                    self.classifier.eval()
+
+                    # Calculate the diagonal approximation of Hessian Lambda with prior term
+                    Lambda_diag = []
+                    
+                    # Loop over each parameter to compute gradients
+                    for param in self.classifier.parameters():
+                        if param.requires_grad:
+                            # Recompute the loss to get a fresh computation graph
+                            outputs = self.classifier(torch.tensor(X_train, dtype=torch.float64).to(self.device))
+                            loss = criterion(outputs.squeeze(), torch.tensor(y_train, dtype=torch.float64).to(self.device))
+                            
+                            # Get gradients with respect to `w_MAP`
+                            param_grad = torch.autograd.grad(loss, param, create_graph=True, retain_graph=True)[0]
+                            
+                            # Compute second derivative for each element
+                            diag_hessian = torch.autograd.grad(param_grad, param, grad_outputs=torch.ones_like(param_grad), retain_graph=True)[0]
+                            
+                            # Add the prior term 1/sigma^2 to each diagonal element
+                            prior_term = (weight_decay) * torch.ones_like(diag_hessian)
+                            diag_hessian += prior_term
+                            
+                            Lambda_diag.append(diag_hessian.view(-1))
+
+                    # Flatten the list into a single tensor for Lambda diagonal approximation
+                    Lambda_diag = torch.cat(Lambda_diag)
+
+                    # Store Lambda_diag for posterior approximation
+                    self.Lambda_diag = Lambda_diag
             self.trained = True
 
         elif self.classifier_method == 'bayesian_logistic_regression':
-            self.blr_param = fit_bayesian_logistic_regression(X,y,sigma_squared=self.C/2)
+            self.blr_param = fit_bayesian_logistic_regression(X,y,sigma_squared=self.C)
             # print(self.blr_param)
             self.trained = True
 
@@ -1089,9 +1181,8 @@ class Feature_Model():
         # Cluster the data
         df_test = self.data_clustering(df_test)
 
-        # TODO: Can add potentially more classifiers
         # Process higher order terms if applicable
-        if self.classifier_method in [ 'logistic_regression_higher_order', 'regularized_logistic_regression', 'bayesian_logistic_regression', 'SGD_classifier_higher_order',]:
+        if self.classifier_method in [ 'logistic_regression_higher_order', 'bayesian_logistic_regression', 'SGD_classifier_higher_order',]:
             for feature in self.second_order_list:           
                 higher_order_feature = f"{feature}**2"
                 df_test[higher_order_feature] = df_test[feature]**2
@@ -1114,22 +1205,56 @@ class Feature_Model():
         if self.sklearn_compatible:
             path = os.path.join(self.feature_subfolder, f"{self.feature_selection}.pkl")
             classifier = joblib.load(path)
-            return classifier.predict_proba(X_test)[:, 1]
+            out = classifier.predict_proba(X_test)[:, 1]
+            if self.smote:
+                out *= self.smote_probability_scaler
+            return out 
         
         elif self.classifier == np.mean:
             if not self.clustered:
                 # Essentially assumes that all of the loans have the same probability of default and does not use any information from the features
-                return np.ones((X_test.shape[0],)) * self.mean_predictor               
+                out = np.ones((X_test.shape[0],)) * self.mean_predictor 
+                if self.smote:
+                    out *= self.smote_probability_scaler
+                return out                
             
             elif self.clustering_method == 'Thesis Clustering':
                 assert set(['Thesis Default', 'Cluster']).issubset(set(df_test.columns))
                 cluster_mean = self.mean_cluster_predictor # maps cluster name to its cluster mean prediction
-                
-                return df_test['Cluster'].map(cluster_mean).values
-
+                out = df_test['Cluster'].map(cluster_mean).values
+                if self.smote:
+                    out *= self.smote_probability_scaler
+                return out 
+        
         elif self.classifier_method == 'bayesian_logistic_regression':
             w_map, cov, bias = self.blr_param['w_map'], self.blr_param['cov_matrix'], self.blr_param['bias']
-            return bayesian_predictive_distribution(X_test, w_map=w_map, bias=bias,cov_matrix=cov, num_samples=1000)
+            out = bayesian_predictive_distribution(X_test, w_map=w_map, bias=bias,cov_matrix=cov, num_samples=1000)
+            if self.smote:
+                out *= self.smote_probability_scaler
+            return out
+        
+        elif self.classifier_method == 'bnn_classifier':
+
+            out = 0
+            
+            if self.bnn_laplace == 'daxberger':
+                X_test = torch.tensor(X_test)
+                out = self.la(X_test, link_approx='mc').numpy()
+
+            else:
+                # Perform Bayesian prediction
+                out = bayesian_predict(
+                    model=self.classifier,
+                    X=X_test,
+                    w_map=self.w_map,
+                    Lambda_diag=self.Lambda_diag,
+                    M=1000,
+                    device=self.device  # Use the model's device
+                )
+
+            if self.smote:
+                out *= self.smote_probability_scaler
+            return out
 
         # Predicts probabilities using a neural network classifier
         elif self.classifier_method == 'nn_classifier':
@@ -1145,92 +1270,15 @@ class Feature_Model():
                 X_test = X_test.to(self.device)
                 y_test_pred = self.classifier(X_test)
             
-            return y_test_pred.detach().to(self.device).numpy()
+            out = y_test_pred.detach().to(self.device).numpy()
+            if self.smote:
+                out *= self.smote_probability_scaler
+            return out 
 
         else:
             raise ValueError("Error: No valid classifier method specified.")
         
         return None    
-  
-    def plot_heatmap(self, features=["IC (Initial)", "LTV (Initial)", ], trained_scaler=None, scaling=False,):
-        """
-        Plot the heat map surface of the predicted probabilities of default with respect to two features where we fix the other features if there are any.
-
-        Parameters:
-            features (list): List of two features to plot the heatmap for.
-            trained_scaler: Scaler object if scaling is required (default is None).
-            scaling (bool): Flag to indicate if scaling is required (default is False).
-        """
-        assert set(features).issubset(set(self.features)), "Specified features must be a subset of training features."
-        assert len(features) == 2, "Exactly two features must be specified."
-        
-        # Generate grid data using np.linspace
-        num_points = 200
-        # TODO: Can be updated
-        domains = {
-            "LTV (Initial)": np.linspace(0.01, 1, num_points),
-            "FCC (Initial)": np.linspace(0.01, 5, num_points),
-            "EBITDA (Initial)": np.linspace(1e6+1, 250e6, num_points*30),
-            "EV Multiple (Initial)": np.linspace(4, 15, num_points),
-            "IC Combined (Initial)": np.linspace(0.01, 5, num_points),
-            "Ownership": ["Sponsor", 'Private Corporate'],
-            "Region": ["Europe", "US"],
-            "Total Net Leverage (Initial)": np.linspace(2.5, 7.5, num_points),
-            "Security": ['First Lien or Unitranche', 'Second Lien or Mezzanine'],
-        }
-        
-        # Validate input features
-        if set(features).issubset(set(domains.keys())):
-            d = self.default_dict
-            fixed_features = [feature for feature in self.features if not ((feature in features) or (feature == 'Thesis Default'))]
-            fixed_features.sort()
-        
-            x_values = domains[features[0]]
-            y_values = domains[features[1]]
-
-            # Create coordinate matrices using np.meshgrid
-            x_grid, y_grid = np.meshgrid(x_values, y_values)
-
-            # Create a DataFrame to store the grid data
-            df_surface = pd.DataFrame({
-                features[0]: x_grid.flatten(),
-                features[1]: y_grid.flatten()
-            })
-            
-            info_str = ''
-            for key in fixed_features:
-                    df_surface[key] = d[key]
-                    info_str += (key + '=' + str(d[key]) + ', ')
-
-            if self.classifier_method != 'mean':           
-                df_surface, _ = pre_processing(df_surface, list(df_surface.columns), simply_clustered=self.simply_clustered, trained_scaler=trained_scaler, scaling=scaling, )
-                
-            prob_of_default = self.predict_proba(df_surface)
-
-            # Create a heatmap for test set
-            plt.figure(figsize=(20,10))
-           
-            if "EBITDA (Initial)" == features[0]:
-                plt.xscale('log')
-            elif "EBITDA (Initial)" == features[1]:
-                plt.yscale('log')
-
-            plt.scatter(x_grid.flatten(),  y_grid.flatten(), c=prob_of_default, cmap='coolwarm')
-            plt.colorbar(label='Probability of Default')
-            plt.xlabel(f'{features[0]}')
-            plt.ylabel(f'{features[1]}')
-            
-            clustering = "simple" if self.simply_clustered else self.clustering_method
-            title = f'Heat Map for {clustering} clustering and using {self.classifier_method} classifier for {features[0][:3]} and {features[1][:3]}'
-            
-            if fixed_features != []:
-                title += ' and fixed ' + info_str
-                title = title[:-1]
-
-            plt.title(title)
-            plt.grid(False)
-            plt.savefig(os.path.join(self.feature_subfolder, f'Heatmap {features[0][:3]} and {features[1][:3]}' + '.pdf'), format='pdf')
-            plt.close()
 
     def plot_auc(self, y_true, y_score):
         """
@@ -1327,96 +1375,6 @@ class Feature_Model():
         
         return out
 
-    def plot_calibration_curve(self, y_true, y_prob, n_bins=30, y_lim=None, x_lim=None):
-        """
-        Plot a calibration curve to compare predicted probabilities to actual outcomes.
-
-        This function splits the interval [0, 1] into `n_bins` uniformly. For each bin, it computes
-        the mean of all entries of `y_prob` which fall into this bin and the corresponding entries 
-        of `y_true` to compute the default frequency (average). The plot shows the mean predicted 
-        probability per bin (x-axis) against the actual default frequency per bin (y-axis).
-
-        Args:
-            y_true (array-like): True binary labels (0 or 1).
-            y_prob (array-like): Predicted probabilities for the positive class.
-            n_bins (int, optional): Number of bins to use for binning predicted probabilities. Default is 30.
-            y_lim (tuple, optional): y-axis limits (min, max). Default is None.
-            x_lim (tuple, optional): x-axis limits (min, max). Default is None.
-
-        Returns:
-            None: Displays and saves the calibration plot.
-        """
-
-        # Ensure input arrays are valid
-        if len(y_true) != len(y_prob):
-            raise ValueError("Length of y_true and y_prob must be the same.")
-        if n_bins <= 0:
-            raise ValueError("Number of bins must be a positive integer.")
-
-        # Calculate calibration curve
-        prob_true, prob_pred = calibration_curve(y_true, y_prob, n_bins=n_bins)
-
-        # Plot the calibration curve
-        plt.plot(prob_pred, prob_true, marker='o', linestyle='-')
-        plt.plot([0, 1], [0, 1], linestyle='--', color='gray')  # Diagonal line for perfect calibration
-
-        plt.xlabel('Average Predicted Probability per Bin')
-        plt.ylabel('Actual Default Frequency per Bin')
-
-        # Set axis limits
-        plt.xlim(left=0, right=x_lim if x_lim else prob_pred.max())
-        plt.ylim(bottom=0, top=y_lim if y_lim else prob_true.max() + 0.04)
-
-        plt.title('Calibration Plot')
-
-        # Add count for each bin
-        bin_edges = np.linspace(0, 1, n_bins + 1)
-        bin_counts = np.histogram(y_prob, bins=bin_edges)[0]
-        for i, count in enumerate(bin_counts):
-            if i < len(prob_pred):
-                plt.text(prob_pred[i], prob_true[i], f'({count})', fontsize=8, va='center', ha='center')
-
-        plt.grid(True)
-
-        # Set x and y tick labels as percentages
-        plt.gca().xaxis.set_major_formatter(ticker.PercentFormatter(xmax=1))
-        plt.gca().yaxis.set_major_formatter(ticker.PercentFormatter(xmax=1))
-
-        # Save the plot
-        plt.savefig(os.path.join(self.feature_subfolder, 'Calibration Plot.png'))
-        plt.close()
-
-    def plot_precision_recall_curve(self, y_true, y_score):
-        """
-        Plot the precision-recall curve based on true labels and predicted scores.
-
-        Args:
-            y_true (array-like): True binary labels (0 or 1).
-            y_score (array-like): Predicted scores (probabilities or confidence scores).
-
-        Returns:
-            None: Saves and displays the precision-recall curve plot.
-        """
-        # Check input validity
-        if len(y_true) != len(y_score):
-            raise ValueError("Length of y_true and y_score must be the same.")
-
-        # Calculate precision-recall curve
-        precision, recall, _ = precision_recall_curve(y_true, y_score)
-
-        # Plot precision-recall curve
-        plt.figure(figsize=(8, 6))
-        plt.plot(recall, precision, marker='.')
-        plt.xlabel('Recall')
-        plt.ylabel('Precision')
-        plt.title('Precision-Recall Curve')
-        plt.grid(True)
-        plt.tight_layout()
-
-        # Save the plot
-        plt.savefig(os.path.join(self.feature_subfolder, 'Precision-Recall Curve.png'))
-        plt.close()
-
     def plot_feature_pd(self, feature=['LTV (Initial)'], trained_scaler=None, scaling=False, convert_to_lossrate=False, recovery_rate=0.6, sub_delta=0.15):
         """
         Plot how the probability of default changes with respect to a specific feature while fixing all other features.
@@ -1437,12 +1395,9 @@ class Feature_Model():
         num_points = 200
         domains = {
             "LTV (Initial)": np.linspace(0.01, 0.99, num_points),
-            "FCC (Initial)": np.linspace(0.01, 6, num_points),
             "EBITDA (Initial)": np.linspace(1e6 + 1, 300 * 1e6, num_points * 30),
             "EV Multiple (Initial)": np.linspace(1.01, 29.9, num_points),
             "IC Combined (Initial)": np.linspace(0.01, 9.99, num_points),
-            "Ownership": ["Sponsor", 'Private Corporate'],
-            "Region": ["Europe", "US"],
             "Total Net Leverage (Initial)": np.linspace(2.1, 7.5, num_points),
             "Security": ['First Lien or Unitranche', 'Second Lien or Mezzanine']
         }
@@ -1510,3 +1465,4 @@ class Feature_Model():
 
         plt.savefig(os.path.join(self.feature_subfolder, f'{title_plot.replace(" ", "_")}_{feature[0].replace(" ", "_")}_Plot.pdf'), format='pdf')
         plt.close()
+
