@@ -11,9 +11,24 @@ from sklearn.metrics import confusion_matrix
 from sklearn.preprocessing import StandardScaler
 from scipy import stats
 
+"""
+Documentation how to run the different models.
+
+Models (CLASSIFIERS):
+Logistic Regression ('continuous', 'logistic_regression_higher_order'):
+Specify Regularizer 
+
+
+
+
+"""
+
+
+
+
 OLD_THESIS_SET = True
 FILE_PATH = 'Your_Dataset.csv'
-EVAL_PATH = r"Model Evaluation.xlsm" # path to your evaluation workbook in excel which formats automatically your outputs
+EVAL_PATH = "Model Evaluation.xlsm" # path to your evaluation workbook in excel which formats automatically your outputs
 
 # Use a specific dataset to predict probabilities using your model and for Bayesian Logistic Regression get uncertainty interval for your prediciton
 SPECIFIC_DATASET = False
@@ -28,8 +43,6 @@ FEATURES = [
             'IC Combined (Initial)',
             'Security',
             'Total Net Leverage (Initial)',
-            # 'Region', 
-            # 'Ownership',
             ]
 SPECIFIC_FEATURE_COMBO = (True, [ 
             'EBITDA (Initial)', 
@@ -37,14 +50,13 @@ SPECIFIC_FEATURE_COMBO = (True, [
             'EV Multiple (Initial)', 
             'IC Combined (Initial)',
             'Security',
-             'Total Net Leverage (Initial)', 
+            'Total Net Leverage (Initial)',
             ])
-# uncomment where you want to have second/third order terms 
 SECOND_ORDER=[
-            # 'LTV (Initial)',  
-            # 'EV Multiple (Initial)', 
-            # 'IC Combined (Initial)',
-            #  'Total Net Leverage (Initial)',
+            'LTV (Initial)',  
+            'EV Multiple (Initial)', 
+            'IC Combined (Initial)',
+             'Total Net Leverage (Initial)',
             ]
 THIRD_ORDER=[
             # 'EBITDA (Initial)', 
@@ -54,48 +66,31 @@ THIRD_ORDER=[
             #  'Total Net Leverage (Initial)',
             # 'FCC (Initial)',
 ]
-
-# add mixing terms
 MIXING_TERMS = False
 
-# Extract the master thesis dataset
-GENERATE_FILTERED_DATASET = False
 
-# adds floors and caps
+# Choose the classifier; don't apply clustering when using benchmark model
 CLUSTERED = False
-
-# set to false when using benchmark model
 SCALING = True
-
 CLASSIFIERS = [
-            # ('continuous', 'logistic_regression'), 
             # ('continuous', 'logistic_regression_higher_order'),
-            ('continuous', 'bayesian_logistic_regression'),
+            # ('continuous', 'bayesian_logistic_regression'),
             # ('continuous', 'bnn_classifier'),
-            ######### BeMA Model###############
             # ('Thesis Clustering', 'mean'), 
-            ###########################
-            # ('continuous', 'regularized_logistic_regression'),
-            # ('continuous', 'nn_classifier'),
-            # ('continuous', 'SGD_classifier'),
+            ('continuous', 'nn_classifier'),
             # ('continuous', 'SGD_classifier_higher_order'),
             # ('continuous', 'mean'),
             ]
-# includes cross vlaidation for higher order logistic regression model
 HYPERTUNE = False
 SCORING = 'roc_auc' # 'neg_brier_score'
-
-# specifies regularization and optimizer for standard logistic regression models
-REGULARIZATION_STRENGTH = 10
-l1_ratio = 0.15
+REGULARIZATION_STRENGTH = 1e-4#1001/100
+l1_ratio = 1/1001
 REGULARIZER = 'l2'
 OPTIMIZER = 'saga'
-
-# for neural network
-NUM_OF_EPOCHS = 50
+NUM_OF_EPOCHS = 100
 SMOTE = False
-# prints the parameters for scaler and model
 PRINT_WEIGHTS = False
+BNN_LAPLACE_METHOD = 'brute-force'
 
 # Evaluations
 NUM_OF_TRAINING = 100
@@ -103,27 +98,21 @@ NUM_OF_TRAINING = 100
 # Used for weight distribution and specific prediction
 TRAIN_SIZE = 1
 GET_WEIGHTS = True
-
 # Threshold optimization set for PAM measure
 BASE_CASE_THRESHOLDS = np.linspace(0.01, 0.495, 99, endpoint=True)
 BASE_CASE_LOAN_LIFE = 3
 THRESHOLDS = np.array([0.0481])
 AUC_RANGE = (0, 0.4)
 COMPUTE_COFUSION_METRICS = True
-FEATURE_PLOTS = False
 SINGLE_FEATURE_PLOTS = True
 CONVERT_TO_LOSSRATE = False
 RECOVERY_RATE = 0.6
 SUB_DELTA = 0.2
-
-EVALUATION_PLOTS = False
-N_BINS = 50
-Y_LIM = 0.3
-X_LIM = 0.3
+AUC_PLOT = False
 
 def generate_combinations(lst):
     """
-    Generate all possible combinations with at least three elements from a given list.
+    Generate all possible combinations with at least two elements from a given list.
 
     Args:
     - lst (list): List of elements to generate combinations from.
@@ -176,7 +165,7 @@ def add_evaluation_to_workbook(evaluation_df, workbook_path, macro_name="format_
 
     except Exception as e:
         print(f"An error occurred while processing the workbook: {str(e)}")
-    
+
 def base_dataset():
     """
     Reads the base dataset after applying various filters based on predefined criteria.
@@ -185,42 +174,33 @@ def base_dataset():
     - pd.DataFrame: Filtered DataFrame containing the base dataset.
       Returns None if there are errors during filtering or if 'Thesis Default' column has NaN values.
     """
-    try:
-        df = df = pd.read_csv(FILE_PATH)
-
-        # Filter LTV (Initial)
-        df = df[(df['LTV (Initial)'] > 0) & (df['LTV (Initial)'] < 1)].copy()
-
-        # Filter IC Combined (Initial)
-        df = df[(df['IC Combined (Initial)'] > 0) & (df['IC Combined (Initial)'] < 10)].copy()
-
-        # Filter EBITDA (Initial)
-        df = df[df['EBITDA (Initial)'] >= 1e6].copy()
-
-        # Filter EV Multiple (Initial)
-        df = df[(df['EV Multiple (Initial)'] > 1) & (df['EV Multiple (Initial)'] < 30)].copy()
-
-        # Filter Ownership and Security
-        df = df[((df['Security'] == 'First Lien or Unitranche') |
-                 (df['Security'] == 'Second Lien or Mezzanine')) &
-                ((df['Ownership'] == 'Sponsor') |
-                 (df['Ownership'] == 'Private Corporate'))].copy()
-
-        # Filter Region
-        df = df[(df['Region'] == 'US') | (df['Region'] == 'Europe')].copy()
-
-        # Filter Total Net Leverage (Initial)
-        df = df[(df['Total Net Leverage (Initial)'] > 2) & (df['Total Net Leverage (Initial)'] < 10)].copy()
-
-        # Drop rows with NaN in 'Thesis Default'
-        df = df.dropna(subset=['Thesis Default'])
-
-        return df
     
-    except Exception as e:
-        print(f"An error occurred: {str(e)}")
-        return None
+    df = pd.read_csv(file_path=FILE_PATH)
+    
+    # Filter LTV (Initial)
+    df = df[(df['LTV (Initial)'] > 0) & (df['LTV (Initial)'] < 1)].copy()
 
+    # Filter IC Combined (Initial)
+    df = df[(df['IC Combined (Initial)'] > 0) & (df['IC Combined (Initial)'] < 10)].copy()
+
+    # Filter EBITDA (Initial)
+    df = df[df['EBITDA (Initial)'] >= 1e6].copy()
+
+    # Filter EV Multiple (Initial)
+    df = df[(df['EV Multiple (Initial)'] > 1) & (df['EV Multiple (Initial)'] < 30)].copy()
+
+    # Filter Ownership and Security
+    df = df[((df['Security'] == 'First Lien or Unitranche') |
+                (df['Security'] == 'Second Lien or Mezzanine'))].copy()
+
+    # Filter Total Net Leverage (Initial)
+    df = df[(df['Total Net Leverage (Initial)'] > 2) & (df['Total Net Leverage (Initial)'] < 10)].copy()
+
+    # Drop rows with NaN in 'Thesis Default'
+    df = df.dropna(subset=['Thesis Default'])
+
+    return df
+    
 def domain_filter(df0):
     """
     Filters the given DataFrame `df0` based on predefined criteria.
@@ -246,9 +226,6 @@ def domain_filter(df0):
 
         # Filter EV Multiple (Initial)
         df = df[(df['EV Multiple (Initial)'] > 1) & (df['EV Multiple (Initial)'] < 30)].copy()
-
-        # Filter Total Net Leverage (Initial)
-        df = df[(df['Total Net Leverage (Initial)'] > 2) & (df['Total Net Leverage (Initial)'] < 10)].copy()
 
         # Filter Security
         df = df[(df['Security'] == 'First Lien or Unitranche') | 
@@ -377,10 +354,6 @@ if __name__ == "__main__":
     print(f"Dataset size: {df.shape[0]}")
     print(f"Default Rate: {np.round(100*df['Thesis Default'].mean(), 2)}%")
 
-    if GENERATE_FILTERED_DATASET:
-        df.to_excel("Thesis Filtered Dataset.xlsx", index=False)
-        print("Stored the new Dataset of for the Thesis project!")
-
     df_base = df.copy()
     default_rate = df_base['Thesis Default'].mean()
 
@@ -472,7 +445,8 @@ if __name__ == "__main__":
                     df = df_base.copy()
 
             # Collect for each traing round the optimal hyperparameter
-            if HYPERTUNE and (classifier in  ['logistic_regression_higher_order', 'SGD_classifier_higher_order']):
+            if HYPERTUNE and (classifier in  ['logistic_regression_higher_order', 'SGD_classifier_higher_order', 'nn_classifier']):
+
                 optimal_hyperparamters = {
                                         'l2':  {
                                                 'C': []
@@ -484,7 +458,8 @@ if __name__ == "__main__":
                                                 'C': [],
                                                 'l1_ratio': [],
                                                 },
-                                    }[REGULARIZER]        
+                                    }[REGULARIZER] 
+                   
 
             # loop through number of training procedures
             for j in range(NUM_OF_TRAINING):
@@ -514,25 +489,21 @@ if __name__ == "__main__":
                                     features=features,
                                     simply_clustered=CLUSTERED, second_order_features=second_order, third_order_features=third_order, penalty=REGULARIZER,
                                     alpha=REGULARIZATION_STRENGTH, num_of_epochs=NUM_OF_EPOCHS, mixing_terms=MIXING_TERMS, optimizer=OPTIMIZER, l1_ratio=l1_ratio,
-                                    hypertune=HYPERTUNE, scoring=SCORING, smote=SMOTE, random_state=j+777, print_weights=PRINT_WEIGHTS, 
+                                    hypertune=HYPERTUNE, scoring=SCORING, smote=SMOTE, random_state=j+777, print_weights=PRINT_WEIGHTS, bnn_laplace='brute-force',
                                     )
                 model.fit()
 
 
                 # collect optimal hyperparameters if hypertuningis being applied; only for higher order logistic regression model available
-                if HYPERTUNE and  (classifier in  ['logistic_regression_higher_order', 'SGD_classifier_higher_order']):
+                if HYPERTUNE and  (classifier in  ['logistic_regression_higher_order', 'SGD_classifier_higher_order', 'nn_classifier']):
                     best_parameters = model.optimal_hyper_parameters 
                     for key in optimal_hyperparamters.keys():
                         optimal_hyperparamters[key].append(best_parameters[key])
-                        
-                # TODO: modle not used remove potentially 
-                if model.classifier_method == 'regularized_logistic_regression':
-                    print(f'Best Regularization Parameter: {np.round(1/model.classifier.C_, 0)}')
 
                 if NUM_OF_TRAINING == 1:
 
                     # Collecting the weight distribution seperately by making use of bootstrapping; checks significance basically 
-                    if GET_WEIGHTS and (classifier in ['logistic_regression', 'logistic_regression_higher_order',]):
+                    if GET_WEIGHTS and (classifier in ['logistic_regression_higher_order',]):
 
                         # Create a dataframe to store feature names and their corresponding weights
                         weights_df = pd.DataFrame({'Feature': model.df.drop('Thesis Default', axis=1).columns, 'Weight': model.classifier.coef_[0]})
@@ -587,11 +558,6 @@ if __name__ == "__main__":
                     if SPECIFIC_DATASET:
                         process_loan_portfolio(features=features, DATA_NAME=DATA_NAME, model=model, trained_scaler=trained_scaler, CLUSTERED=CLUSTERED, confidence_interval=UNCERTAINTY_INTERVAL)
                         print("Specific dataset with default probability has been generated!")
-
-                    # generate all heatmap combos
-                    if FEATURE_PLOTS:
-                        for two_features in combinations([x for x in features if x != 'Thesis Default'], 2):
-                            model.plot_heatmap(features=list(two_features), trained_scaler=trained_scaler, scaling=SCALING, )
                     
                     if SINGLE_FEATURE_PLOTS:
                         single_feature_list = [[feat] for feat in features if feat != 'Thesis Default']
@@ -599,13 +565,11 @@ if __name__ == "__main__":
                             model.plot_feature_pd(feature=feat, trained_scaler=trained_scaler, scaling=SCALING, convert_to_lossrate=CONVERT_TO_LOSSRATE, recovery_rate=RECOVERY_RATE, sub_delta=SUB_DELTA, )
 
                     # only show evaluation plots if there is a test set
-                    if EVALUATION_PLOTS and (TRAIN_SIZE < 1):
+                    if AUC_PLOT and (TRAIN_SIZE < 1):
                         df_test  = df_train[split_index:]
                         y_test = df_test['Thesis Default']
                         prob_of_default = model.predict_proba(df_test)
                         model.plot_auc(y_true=y_test, y_score=prob_of_default)
-                        model.plot_calibration_curve(y_true=y_test, y_prob=prob_of_default,n_bins=N_BINS, y_lim=Y_LIM, x_lim=X_LIM,)
-                        model.plot_precision_recall_curve(y_true=y_test, y_score=prob_of_default)
 
                 # Collect single metrics   
                 if (NUM_OF_TRAINING>1) and COMPUTE_COFUSION_METRICS:
@@ -633,7 +597,7 @@ if __name__ == "__main__":
                 # Add metrics and project specific measure
                 out_final[model_str] = list(np.mean(np.array(out), axis=0))+ [cum_net_r[0], cum_net_r[1]]
 
-            if HYPERTUNE and  (classifier in  ['logistic_regression_higher_order', 'SGD_classifier_higher_order']): 
+            if HYPERTUNE and  (classifier in  ['logistic_regression_higher_order', 'SGD_classifier_higher_order', 'nn_classifier']): 
 
                 for key in optimal_hyperparamters.keys():
                     param_values = optimal_hyperparamters[key]
@@ -653,4 +617,5 @@ if __name__ == "__main__":
         # print(f"Test set default count and average default rate: {df_test['Thesis Default'].shape[0]}, {np.round(df_test['Thesis Default'].mean() * 100, 2)}%")
         add_evaluation_to_workbook(evaluation_df=evaluation_df, workbook_path=EVAL_PATH, macro_name="format_metrics")
 
+    
     
