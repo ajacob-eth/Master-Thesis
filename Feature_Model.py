@@ -11,7 +11,7 @@ import os
 import json
 from itertools import combinations
 
-from laplace import Laplace
+# from laplace import Laplace
 
 import torch 
 from torch import nn
@@ -1106,10 +1106,11 @@ class Feature_Model():
             if self.classifier_method == 'bnn_classifier':
 
                 if self.bnn_laplace == 'daxberger':
-                    self.la = Laplace(self.classifier, "classification", subset_of_weights='all', hessian_structure="diag")
-                    self.la.fit(train_loader=train_loader)
+                    raise ValueError('Deprecated')
+                    # self.la = Laplace(self.classifier, "classification", subset_of_weights='all', hessian_structure="diag")
+                    # self.la.fit(train_loader=train_loader)
 
-                    self.la.optimize_prior_precision(method='CV', val_loader=val_loader)
+                    # self.la.optimize_prior_precision(method='CV', val_loader=val_loader)
 
 
                 # BRUTE FORCE AUTODIFFERENTIATION 

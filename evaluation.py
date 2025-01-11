@@ -10,10 +10,12 @@ import statsmodels.api as sm
 from sklearn.metrics import confusion_matrix
 from sklearn.preprocessing import StandardScaler
 from scipy import stats
+import os
 
 """
 Documentation how to run and evaluate all the models.
 
+In 'generate_dataset.py' a simulated dataset is provided to run this script.
 
 1) Specification of the Models (CLASSIFIERS):
 
@@ -66,8 +68,8 @@ FILE_PATH = 'Your_Dataset.csv' # path to underlying dataset
 EVAL_PATH = "Model Evaluation.xlsm" # path to your evaluation workbook in excel which formats automatically your outputs
 
 # Use a specific dataset to predict probabilities using your model and for Bayesian Logistic Regression get uncertainty interval for your prediciton
-SPECIFIC_DATASET = False
-DATA_NAME = r'loan_portfolio.xlsx' # path to your loan data 
+SPECIFIC_DATASET = True
+DATA_NAME = 'loan_portfolio.csv' # path to your loan data 
 UNCERTAINTY_INTERVAL = False # only for bayesian logistic regression available
 
 # Underlying feature set to check feature combinations
@@ -107,10 +109,10 @@ CLUSTERED = False
 SCALING = True
 CLASSIFIERS = [
             # ('continuous', 'logistic_regression_higher_order'),
-            # ('continuous', 'bayesian_logistic_regression'),
+            ('continuous', 'bayesian_logistic_regression'),
             # ('continuous', 'bnn_classifier'),
             # ('Thesis Clustering', 'mean'), 
-            ('continuous', 'nn_classifier'),
+            # ('continuous', 'nn_classifier'),
             # ('continuous', 'SGD_classifier_higher_order'),
             # ('continuous', 'mean'),
             ]
@@ -127,7 +129,7 @@ PRINT_WEIGHTS = False # prints the weights for the logistic regression models
 BNN_LAPLACE_METHOD = 'brute-force'
 
 # Evaluations
-NUM_OF_TRAINING = 100
+NUM_OF_TRAINING = 1
 
 # Used for weight distribution and specific prediction
 TRAIN_SIZE = 1
@@ -162,25 +164,32 @@ def generate_combinations(lst):
 def add_evaluation_to_workbook(evaluation_df, workbook_path, macro_name="format_metrics", apply_macro=True):
     """
     Adds a pandas DataFrame containing evaluation metrics to an existing Excel workbook.
-
+    
     Parameters:
     - evaluation_df (pd.DataFrame): DataFrame containing evaluation metrics.
     - workbook_path (str): File path to the existing Excel workbook.
     - macro_name (str, optional): Name of the macro in the workbook for formatting metrics. Default is "format_metrics".
     - apply_macro (bool, optional): Flag to apply the macro after adding the DataFrame. Default is True.
-
+    
     Returns:
     - None
-
+    
     Notes:
     - This function uses xlwings to interact with Excel. Make sure xlwings and pandas are installed.
-
+    
     Example:
     add_evaluation_to_workbook(evaluation_df, "path/to/workbook.xlsx", macro_name="format_metrics", apply_macro=True)
     """
     try:
-        # Load the existing workbook
-        wb = xw.Book(workbook_path)
+        # Check if the workbook exists
+        if not os.path.exists(workbook_path):
+            # Create a new workbook if it doesn't exist
+            print(f"Workbook does not exist. Creating a new workbook at: {workbook_path}")
+            wb = xw.Book()
+            wb.save(workbook_path)
+        else:
+            # Load the existing workbook
+            wb = xw.Book(workbook_path)
 
         # Add DataFrame to a new sheet
         ws = wb.sheets.add()
@@ -209,7 +218,7 @@ def base_dataset():
       Returns None if there are errors during filtering or if 'Thesis Default' column has NaN values.
     """
     
-    df = pd.read_csv(file_path=FILE_PATH)
+    df = pd.read_csv(filepath_or_buffer=FILE_PATH)
     
     # Filter LTV (Initial)
     df = df[(df['LTV (Initial)'] > 0) & (df['LTV (Initial)'] < 1)].copy()
@@ -289,7 +298,7 @@ def process_loan_portfolio(features, DATA_NAME, model, trained_scaler, CLUSTERED
     """
 
     # Load data from the specified Excel file
-    data = pd.read_excel(DATA_NAME)
+    data = pd.read_csv(DATA_NAME)
     
     # Strip extra spaces from the column names
     data.columns = data.columns.str.strip()
@@ -302,7 +311,7 @@ def process_loan_portfolio(features, DATA_NAME, model, trained_scaler, CLUSTERED
     assert set(features_to_check).issubset(features_in_data), "Not all features are present in the dataset"
 
     # Apply pre-clustering function to 'Security' column
-    data['Security'] = data['Security'].apply(Security_PreCluster)
+    # data['Security'] = data['Security'].apply(Security_PreCluster)
     
     # Filter the data based on domain criteria
     filtered_data = domain_filter(data)
@@ -510,7 +519,7 @@ if __name__ == "__main__":
                 # Historical Split or whole dataset used for training
                 else:
                     df = base_dataset()
-                    df = df.sort_values(by='Launch Date')
+                    df = df.sort_values(by='Launch Date') if 'Launch Date' in df.columns else df
                     if not (classifier in ['mean']): 
                         df, _ = pre_processing(df, features=features, simply_clustered=CLUSTERED, trained_scaler=trained_scaler, scaling=SCALING, )
 
