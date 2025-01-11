@@ -20,7 +20,7 @@ In 'generate_dataset.py' a simulated dataset is provided to run this script.
 1) Specification of the Models (CLASSIFIERS):
 
 Logistic Regression ('continuous', 'logistic_regression_higher_order'):
-REGULARIZER(str): added penalty term ('l1'/'l2'//'elasticnet') or set None applying no regularization
+REGULARIZER(str): adds penalty term ('l1'/'l2'/'elasticnet') or set None applying no regularization
 l1_ratio(float): lambda for 'elasticnet'
 REGULARIZATION_STRENGTH(float): alpha
 HYPERTUNE(bool): If set to true gridsearch is run with hyperparameterset specified in Feature_Model.fit()
@@ -30,7 +30,7 @@ THIRD_ORDER(list): List specifying which features should have third-order term
 MIXING_TERMS(bool): If set to true all possible mixing terms are added
 SCALING(bool): if true scaling is applied to the data
 OPTIMIZER(str): set to 'saga', see documentation LogisticRegression class in sklearn other algorithms
-Note same specification for ('continuous', 'SGD_classifier_higher_order') but it uses SGD instead of 'saga'
+Note: same specification for ('continuous', 'SGD_classifier_higher_order') but it uses SGD instead of 'saga'
 
 Bayesian Logistic Regression ('continuous', 'bayesian_logistic_regression'):
 REGULARIZATION_STRENGTH(float): alpha=1/sigma^2
@@ -61,11 +61,11 @@ COMPUTE_COFUSION_METRICS(bool): If set to true and NUM_OF_TRAINING > 1 then mode
 SINGLE_FEATURE_PLOTS(bool): If set to true and NUM_OF_TRAINING = 1 then probability of default curves are plotted and stored
 AUC_PLOT(bool): If set to true, NUM_OF_TRAINING = 1  and TRAIN_SIZE < 1 then AUC is plotted and stored
 GET_WEIGHTS (bool): If set to true and NUM_OF_TRAINING = 1 then weight distribution stats according to the thesis are created in the file "Model Evaluation.xlsm" (only for 'logistic_regression_higher_order')
-SPECIFIC_DATASET(bool): If set to true one can apply the model to loan portfolio with path (DATA_NAME); for BLR one can create uncertainty interval as discussed in thesis
+SPECIFIC_DATASET(bool): If set to true one can apply the model to loan portfolio with path (DATA_NAME); for BLR one can create uncertainty interval by setting UNCERTAINTY_INTERVAL to true as discussed in thesis
 """
 
 FILE_PATH = 'Your_Dataset.csv' # path to underlying dataset
-EVAL_PATH = "Model Evaluation.xlsm" # path to your evaluation workbook in excel which formats automatically your outputs
+EVAL_PATH = "Model Evaluation.xlsm" # path to your evaluation workbook in excel which can format automatically your outputs if macro is available; if file is not available one then one gets created in the code 
 
 # Use a specific dataset to predict probabilities using your model and for Bayesian Logistic Regression get uncertainty interval for your prediciton
 SPECIFIC_DATASET = True
@@ -108,8 +108,8 @@ MIXING_TERMS = False
 CLUSTERED = False
 SCALING = True
 CLASSIFIERS = [
-            # ('continuous', 'logistic_regression_higher_order'),
-            ('continuous', 'bayesian_logistic_regression'),
+            ('continuous', 'logistic_regression_higher_order'),
+            # ('continuous', 'bayesian_logistic_regression'),
             # ('continuous', 'bnn_classifier'),
             # ('Thesis Clustering', 'mean'), 
             # ('continuous', 'nn_classifier'),
@@ -129,7 +129,7 @@ PRINT_WEIGHTS = False # prints the weights for the logistic regression models
 BNN_LAPLACE_METHOD = 'brute-force'
 
 # Evaluations
-NUM_OF_TRAINING = 1
+NUM_OF_TRAINING = 100
 
 # Used for weight distribution and specific prediction
 TRAIN_SIZE = 1
